@@ -205,9 +205,9 @@ function GENERATECONF(){
       cat << EOF > $CONFFILE
 USER=
 PASSWORD=
-KEYFILE=
-DBFILE=
-DELTATIME=
+KEYFILE=$HOME/.ssh/id_rsa
+DBFILE=sqlite.db
+DELTATIME=86400
 EOF
       if [ -f $CONFFILE ]
       then
@@ -220,9 +220,9 @@ EOF
     cat << EOF > $CONFFILE
 USER=
 PASSWORD=
-KEYFILE=
-DBFILE=
-DELTATIME=
+KEYFILE=$HOME/.ssh/id_rsa
+DBFILE=sqlite.db
+DELTATIME=86400
 EOF
     if [ -f $CONFFILE ]
     then
