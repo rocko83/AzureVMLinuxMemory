@@ -56,9 +56,6 @@ function COLLECT(){
   DBINIT
   GETVMLIST
   GETIP
-  #GETRAM
-  #export RAMPER=$(GETRAM 1.2.3.4)
-  #echo $RAMPER
 }
 function GETSIZE(){
   echo null
