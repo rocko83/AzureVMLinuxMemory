@@ -1,6 +1,6 @@
 #!/bin/bash
 export CONFFILE=.config
-function MKTMPFILE() {
+function MKTMPFILE(){
 	case $1 in
 	create)
 		mktemp -p /tmp --suffix -linuxsshmen
@@ -18,6 +18,7 @@ function GETRAM(){
   export DBFILE=$(READCONF DBFILE)
   export TMPDATA=$(MKTMPFILE create)
   export TMPDATA2=$(MKTMPFILE create)
+	export DELTATIME=$(READCONF DELTATIME)
   sqlite3 -separator " " $DBFILE "select vmip, vmname, vmid from  vms where lastdata == 0" > $TMPDATA2
   echo COLLECTING RAM USAGE
   export TOTAL=$(wc -l $TMPDATA2 | awk '{print $1}')
@@ -29,6 +30,7 @@ function GETRAM(){
     echo $vmname $vmip
     SSHREMOTOIKEYLESS $vmip "cat /proc/meminfo" > $TMPDATA
     export RETURN=$?
+		export TIMESTAMP=$(date +"%s")
     if [ $RETURN -ne 0 ]
     then
       echo FAil to connect to $vmname $vmip
@@ -38,9 +40,38 @@ function GETRAM(){
       export MENAVAIL=$(cat $TMPDATA | egrep -w "^MemAvailable" | awk '{print $2}')
       export MEMUSED=$(expr $MENTOTAL - $MENAVAIL)
       RAMPER=$(printf "%.3f" $(echo "($MEMUSED * 100 ) /  $MENTOTAL "| bc -l| sed -e "s/\./,/g"))
-      TIMESTAMP=$(date +"%s")
+
       echo Success, $vmname $vmip Ram Percent = $RAMPER
-      sqlite3 $DBFILE "update vms set ramper='$RAMPER',lastdata='$TIMESTAMP'  where vmid = '$vmid'"
+      sqlite3 $DBFILE "update vms set ramper='$RAMPER',lastdata='$TIMESTAMP', lascheckstatus=0  where vmid = '$vmid'"
+    fi
+    COUNTER=$(expr $COUNTER + 1)
+		continue
+  done < $TMPDATA2
+	export TIMESTAMP=$(expr $(date +"%s") - $DELTATIME)
+  sqlite3 -separator " " $DBFILE "select vmip, vmname, vmid from  vms where lastdata <= '$TIMESTAMP'" > $TMPDATA2
+  echo COLLECTING RAM USAGE
+  export TOTAL=$(wc -l $TMPDATA2 | awk '{print $1}')
+  export COUNTER=1
+  while read vmip vmname vmid
+  do
+    #echo -ne "$COUNTER/$TOTAL\r"
+    echo $COUNTER/$TOTAL
+    echo $vmname $vmip
+    SSHREMOTOIKEYLESS $vmip "cat /proc/meminfo" > $TMPDATA
+    export RETURN=$?
+		export TIMESTAMP=$(date +"%s")
+    if [ $RETURN -ne 0 ]
+    then
+      echo FAil to connect to $vmname $vmip
+      sqlite3 $DBFILE "update vms set lascheckstatus=1 ,lastdata='$TIMESTAMP'  where vmid = '$vmid'"
+    else
+      export MENTOTAL=$(cat $TMPDATA | egrep -w "^MemTotal" | awk '{print $2}')
+      export MENAVAIL=$(cat $TMPDATA | egrep -w "^MemAvailable" | awk '{print $2}')
+      export MEMUSED=$(expr $MENTOTAL - $MENAVAIL)
+      RAMPER=$(printf "%.3f" $(echo "($MEMUSED * 100 ) /  $MENTOTAL "| bc -l| sed -e "s/\./,/g"))
+
+      echo Success, $vmname $vmip Ram Percent = $RAMPER
+      sqlite3 $DBFILE "update vms set ramper='$RAMPER',lastdata='$TIMESTAMP', lascheckstatus=0   where vmid = '$vmid'"
     fi
     COUNTER=$(expr $COUNTER + 1)
   done < $TMPDATA2
@@ -50,7 +81,32 @@ function GETRAM(){
   MKTMPFILE delete $TMPDATA2
 }
 function GETCPU(){
-  echo null
+	export DBFILE=$(READCONF DBFILE)
+  export TMPDATA=$(MKTMPFILE create)
+	export TMPDATA2=$(MKTMPFILE create)
+	sqlite3 -separator " " $DBFILE "select vmip, vmname, vmid from  vms where vmcpu == 'null'" > $TMPDATA2
+  export TOTAL=$(wc -l $TMPDATA2 | awk '{print $1}')
+	export COUNTER=1
+	while read vmip vmname vmid
+	do
+		#echo -ne "$COUNTER/$TOTAL\r"
+		echo $COUNTER/$TOTAL
+		echo $vmname $vmip
+		SSHREMOTOIKEYLESS $vmip "vmstat" > $TMPDATA
+		export RETURN=$?
+		export TIMESTAMP=$(date +"%s")
+		if [ $RETURN -ne 0 ]
+		then
+			echo FAil to connect to $vmname $vmip
+			sqlite3 $DBFILE "update vms set lascheckstatus=1 ,lastdata='$TIMESTAMP'  where vmid = '$vmid'"
+		else
+			export VMCPU=$(cat $TMPDATA |  awk '{print $15}'| grep ^[0-9])
+			echo Success, $vmname $vmip CPU IDLE = $VMCPU
+			sqlite3 $DBFILE "update vms set vmcpu='$VMCPU',lastdata='$TIMESTAMP'  where vmid = '$vmid'"
+		fi
+	done
+	MKTMPFILE delete $TMPDATA
+	MKTMPFILE delete $TMPDATA2
 }
 function COLLECT(){
   DBINIT
@@ -81,7 +137,7 @@ function GETVMLIST(){
   done < $TMPDATA
   MKTMPFILE delete $TMPDATA
 }
-function GETIP() {
+function GETIP(){
   echo COLLECTING IP ADDRESS
   export DBFILE=$(READCONF DBFILE)
   export TMPDATA=$(MKTMPFILE create)
@@ -98,10 +154,9 @@ function GETIP() {
   done < $TMPDATA
   MKTMPFILE delete $TMPDATA
 }
-function DBINIT()
-{
+function DBINIT(){
   export DBFILE=$(READCONF DBFILE)
-  sqlite3 $DBFILE "create table IF NOT EXISTS vms(vmname varchar(255) , vmid varchar(300) primary key,vmsize varchar(50), vmrg varchar(50), location varchar(50), nicid varchar(300), vmip varchar(15), ramper varchar(6), lastdata real, lascheckstatus int  )"
+  sqlite3 $DBFILE "create table IF NOT EXISTS vms(vmname varchar(255) , vmid varchar(300) primary key,vmsize varchar(50), vmrg varchar(50), location varchar(50), nicid varchar(300), vmip varchar(15), ramper varchar(6), lastdata real, lascheckstatus int , vmcpu int )"
 
 }
 function COPYKEY(){
@@ -152,6 +207,7 @@ USER=
 PASSWORD=
 KEYFILE=
 DBFILE=
+DELTATIME=
 EOF
       if [ -f $CONFFILE ]
       then
@@ -166,6 +222,7 @@ USER=
 PASSWORD=
 KEYFILE=
 DBFILE=
+DELTATIME=
 EOF
     if [ -f $CONFFILE ]
     then
@@ -183,6 +240,7 @@ function HELP(){
   echo $0 getcpu
   echo $0 copykey \<hostname\>
   echo $0 generateconf
+	echo $0 collect
   exit 1
 }
 if [ $# -eq 1 ]
