@@ -236,9 +236,7 @@ EOF
 function HELP(){
   echo Linux Azure performance statistic
   echo USAGE:
-  echo $0 getram \<hostname\>
-  echo $0 getcpu
-  echo $0 copykey \<hostname\>
+  echo $0 getram
   echo $0 generateconf
 	echo $0 collect
   exit 1
