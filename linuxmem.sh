@@ -15,14 +15,39 @@ function MKTMPFILE() {
 	esac
 }
 function GETRAM(){
+  export DBFILE=$(READCONF DBFILE)
   export TMPDATA=$(MKTMPFILE create)
-  SSHREMOTOIWTHKEY $1 "cat /proc/meminfo" > $TMPDATA
-  export MENTOTAL=$(cat $TMPDATA | egrep -w "^MemTotal" | awk '{print $2}')
-  export MENAVAIL=$(cat $TMPDATA | egrep -w "^MemAvailable" | awk '{print $2}')
-  export MEMUSED=$(expr $MENTOTAL - $MENAVAIL)
+  export TMPDATA2=$(MKTMPFILE create)
+  sqlite3 -separator " " $DBFILE "select vmip, vmname, vmid from  vms where lastdata == 0" > $TMPDATA2
+  echo COLLECTING RAM USAGE
+  export TOTAL=$(wc -l $TMPDATA2 | awk '{print $1}')
+  export COUNTER=1
+  while read vmip vmname vmid
+  do
+    #echo -ne "$COUNTER/$TOTAL\r"
+    echo $COUNTER/$TOTAL
+    echo $vmname $vmip
+    SSHREMOTOIKEYLESS $vmip "cat /proc/meminfo" > $TMPDATA
+    export RETURN=$?
+    if [ $RETURN -ne 0 ]
+    then
+      echo FAil to connect to $vmname $vmip
+      sqlite3 $DBFILE "update vms set lascheckstatus=1 ,lastdata='$TIMESTAMP'  where vmid = '$vmid'"
+    else
+      export MENTOTAL=$(cat $TMPDATA | egrep -w "^MemTotal" | awk '{print $2}')
+      export MENAVAIL=$(cat $TMPDATA | egrep -w "^MemAvailable" | awk '{print $2}')
+      export MEMUSED=$(expr $MENTOTAL - $MENAVAIL)
+      RAMPER=$(printf "%.3f" $(echo "($MEMUSED * 100 ) /  $MENTOTAL "| bc -l| sed -e "s/\./,/g"))
+      TIMESTAMP=$(date +"%s")
+      echo Success, $vmname $vmip Ram Percent = $RAMPER
+      sqlite3 $DBFILE "update vms set ramper='$RAMPER',lastdata='$TIMESTAMP'  where vmid = '$vmid'"
+    fi
+    COUNTER=$(expr $COUNTER + 1)
+  done < $TMPDATA2
   #expr $(expr $(expr $MEMUSED \* 100) \/ $MENTOTAL)
-  echo $(printf "%.3f" $(echo "($MEMUSED * 100 ) /  $MENTOTAL "| bc -l| sed -e "s/\./,/g"))
+
   MKTMPFILE delete $TMPDATA
+  MKTMPFILE delete $TMPDATA2
 }
 function GETCPU(){
   echo null
@@ -31,6 +56,7 @@ function COLLECT(){
   DBINIT
   GETVMLIST
   GETIP
+  #GETRAM
   #export RAMPER=$(GETRAM 1.2.3.4)
   #echo $RAMPER
 }
@@ -44,14 +70,17 @@ function GETVMLIST(){
   az vm list  --query "[].[name,id,hardwareProfile.vmSize,resourceGroup,location,networkProfile.networkInterfaces[0].id]" -o tsv > $TMPDATA
   export TOTAL=$(wc -l $TMPDATA | awk '{print $1}')
   echo $TOTAL VMs Found on azure
+  export COUNTER=1
+  echo Updating database
   while read VMNAME VMID VMSIZE VMRG LOCATION NICID
   do
     #export VMIP=$(GETIP $NICID $VMNAME $VMRG)
 
-    echo Updating database
-    echo $VMNAME $LOCATION $VMRG
-    sqlite3 $DBFILE "INSERT INTO vms(vmname,vmid,vmsize,vmrg,location,nicid,vmip,ramper,lastdata,lascheckstatus) SELECT '$VMNAME', '$VMID','$VMSIZE','$VMRG','$LOCATION','$NICID','null','null','0','1' WHERE NOT EXISTS(SELECT 1 FROM vms WHERE vmid = '$VMID')"
 
+    #echo $VMNAME $LOCATION $VMRG
+    echo -ne "$COUNTER/$TOTAL\r"
+    sqlite3 $DBFILE "INSERT INTO vms(vmname,vmid,vmsize,vmrg,location,nicid,vmip,ramper,lastdata,lascheckstatus) SELECT '$VMNAME', '$VMID','$VMSIZE','$VMRG','$LOCATION','$NICID','null','null','0','1' WHERE NOT EXISTS(SELECT 1 FROM vms WHERE vmid = '$VMID')"
+    COUNTER=$(expr $COUNTER + 1)
   done < $TMPDATA
   MKTMPFILE delete $TMPDATA
 }
@@ -64,7 +93,8 @@ function GETIP() {
   export COUNTER=1
   while read VMANAME NICID VMRG
   do
-    echo $COUNTER \/ $TOTAL $VMANAME $VMRG
+    #echo $COUNTER \/ $TOTAL $VMANAME $VMRG
+    echo -ne "$COUNTER/$TOTAL\r"
     export VMIP=$(az vm nic show --nic "$NICID" --vm-name $VMANAME --resource-group $VMRG --query "[ipConfigurations[0].privateIpAddress]" -o tsv)
     sqlite3 $DBFILE "update vms set vmip='$VMIP' where nicid = '$NICID'"
     COUNTER=$(expr $COUNTER + 1)
@@ -85,12 +115,12 @@ function COPYKEY(){
 function SSHREMOTOIWTHKEY(){
   export USER=$(READCONF USER)
   export KEYFILE=$(READCONF KEYFILE)
-  ssh -i $KEYFILE ${USER}@$1 "$2"
+  ssh -i $KEYFILE -o ConnectTimeout=3 ${USER}@$1 "$2"
 }
 function SSHREMOTOIKEYLESS(){
   export SSHPASS=$(READCONF PASSWORD)
   export USER=$(READCONF USER)
-  sshpass -e ssh ${USER}@$1 "$2"
+  sshpass -e ssh -o ConnectTimeout=3 ${USER}@$1 "$2"
 }
 function CRUDE(){
   #CREATE
@@ -154,8 +184,6 @@ function HELP(){
   echo USAGE:
   echo $0 getram \<hostname\>
   echo $0 getcpu
-  echo $0 getsize \<vm id\>
-  echo $0 getvmlist
   echo $0 copykey \<hostname\>
   echo $0 generateconf
   exit 1
@@ -166,11 +194,11 @@ then
     collect)
       COLLECT
       ;;
-    getvmlist)
-      echo null
-      ;;
     generateconf)
       GENERATECONF
+      ;;
+    getram)
+      GETRAM
       ;;
     *)
       HELP
@@ -180,12 +208,6 @@ else
   if [ $# -eq 2 ]
   then
     case $1 in
-      getram)
-        GETRAM $2
-        ;;
-      getsize)
-        echo null
-        ;;
       copykey)
         echo null
         ;;
